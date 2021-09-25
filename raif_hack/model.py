@@ -6,11 +6,8 @@ import logging
 
 from lightgbm import LGBMRegressor
 
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, OrdinalEncoder
 from sklearn.exceptions import NotFittedError
-from raif_hack.data_transformers import SmoothedTargetEncoding
 
 logger = logging.getLogger(__name__)
 
@@ -36,25 +33,50 @@ class BenchmarkModel():
     def __init__(self, numerical_features: typing.List[str],
                  ohe_categorical_features: typing.List[str],
                  ste_categorical_features: typing.List[typing.Union[str, typing.List[str]]],
-                 model_params: typing.Dict[str, typing.Union[str,int,float]]):
+                 additional_categorical_features: typing.List[str],
+                 model_params: typing.Dict[str, typing.Union[str, int, float]]):
         self.num_features = numerical_features
         self.ohe_cat_features = ohe_categorical_features
         self.ste_cat_features = ste_categorical_features
+        self.additional_categorical_features = additional_categorical_features
 
-        self.preprocessor = ColumnTransformer(transformers=[
-            ('num', StandardScaler(), self.num_features),
-            ('ohe', OneHotEncoder(), self.ohe_cat_features),
-            ('ste', OrdinalEncoder(handle_unknown='use_encoded_value',unknown_value=-1),
-             self.ste_cat_features)])
+        self.scaler = StandardScaler()
+        self.one_hot_encoder = OneHotEncoder()
+        self.ordinal_encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
 
         self.model = LGBMRegressor(**model_params)
 
-        self.pipeline = Pipeline(steps=[
-            ('preprocessor', self.preprocessor),
-            ('model', self.model)])
-
         self._is_fitted = False
-        self.corr_coef = 0
+        self.corr_coef = pd.DataFrame([], columns=['city', 'deviation'])
+
+    def _fit_preprocessing(self, X, y):
+        self.scaler.fit(X[self.num_features])
+        self.one_hot_encoder.fit(X[self.ohe_cat_features])
+        self.ordinal_encoder.fit(X[self.ste_cat_features], y)
+
+    def _transform_preprocessing(self, X, y=None, is_test:bool = False):
+        X = X.copy()
+        X['total_square'] = np.log1p(X['total_square'])
+        X['osm_city_closest_dist'] = np.log1p(X['osm_city_closest_dist'])
+        new_features = X[['price_type']].rename(columns={'price_type': 'cat_price_type'}).reset_index(drop=True)
+        # применение стндартизациии
+        scaler_features = self.scaler.transform(X[self.num_features])
+        scaler_features = pd.DataFrame(scaler_features, columns=[f'num_{col}' for col in self.num_features])
+        # применение ordinal_encoder
+        ste_columns = [f'cat_{col}' for col in self.ste_cat_features]
+        ste_encoding = self.ordinal_encoder.transform(X[self.ste_cat_features])
+        ste_encoding = pd.DataFrame(ste_encoding, columns=ste_columns)
+        # применение one_hot_encoder
+        ohe_columns = [
+            f'cat_{prefix}_{value}'
+            for prefix, values in zip(self.ohe_cat_features, self.one_hot_encoder.categories_)
+            for value in values
+        ]
+        ohe_encoding = self.one_hot_encoder.transform(X[self.ohe_cat_features])
+        ohe_encoding = pd.DataFrame.sparse.from_spmatrix(ohe_encoding, columns=ohe_columns)
+        # result of transformers
+        transformed = pd.concat([new_features, scaler_features, ste_encoding, ohe_encoding], axis=1)
+        return transformed, y
 
     def _find_corr_coefficient(self, X_manual: pd.DataFrame, y_manual: pd.Series):
         """Вычисление корректирующего коэффициента
@@ -62,12 +84,14 @@ class BenchmarkModel():
         :param X_manual: pd.DataFrame с ручными оценками
         :param y_manual: pd.Series - цены ручника
         """
-        predictions = self.pipeline.predict(X_manual)
-        deviation = ((y_manual - predictions)/predictions).median()
-        self.corr_coef = deviation
+        features = X_manual.copy()
+        features = features[features['price_type'] == 1]
+        features['predict'] = self.predict(features)
+        features['deviation'] = (y_manual - features['predict']) / features['predict']
+        self.corr_coef = features[['city', 'deviation']].groupby('city')['deviation'].median().reset_index()
 
-    def fit(self, X_offer: pd.DataFrame, y_offer: pd.Series,
-            X_manual: pd.DataFrame, y_manual: pd.Series):
+    def fit(self, x_train: pd.DataFrame, y_train: pd.Series,
+            x_val: pd.DataFrame, y_val: pd.Series):
         """Обучение модели.
         ML модель обучается на данных по предложениям на рынке (цены из объявления)
         Затем вычисляется среднее отклонение между руяными оценками и предиктами для корректировки стоимости
@@ -78,11 +102,24 @@ class BenchmarkModel():
         :param y_manual: pd.Series - цены ручника
         """
         logger.info('Fit lightgbm')
-        self.pipeline.fit(X_offer, y_offer, model__feature_name=[f'{i}' for i in range(70)],model__categorical_feature=['67','68','69'])
+        self._fit_preprocessing(x_train, y_train)
+        x_train, y_train = self._transform_preprocessing(x_train, y_train)
+        x_val_transformed, y_val_transformed = self._transform_preprocessing(x_val, y_val)
+        self.model.fit(
+            x_train, y_train,
+            eval_set=[
+                (x_train, y_train),
+                (x_val_transformed, y_val_transformed)
+            ],
+            eval_names=['train', 'val'],
+            early_stopping_rounds=100,
+            feature_name=x_train.columns.tolist(),
+            categorical_feature=[col for col in x_train.columns if col.startswith('cat_')]
+        )
         logger.info('Find corr coefficient')
-        self._find_corr_coefficient(X_manual, y_manual)
-        logger.info(f'Corr coef: {self.corr_coef:.2f}')
         self.__is_fitted = True
+        self._find_corr_coefficient(x_val, y_val)
+        # logger.info(f'Corr coef: {self.corr_coef.to_string()}')
 
     def predict(self, X: pd.DataFrame) -> np.array:
         """Предсказание модели Предсказываем преобразованный таргет, затем конвертируем в обычную цену через обратное
@@ -92,9 +129,14 @@ class BenchmarkModel():
         :return: np.array, предсказания (цены на коммерческую недвижимость)
         """
         if self.__is_fitted:
-            predictions = self.pipeline.predict(X)
-            corrected_price = predictions * (1 + self.corr_coef)
-            return corrected_price
+            features, _ = self._transform_preprocessing(X, is_test=True)
+            X.loc[:, 'predictions'] = self.model.predict(features)
+            pred_with_corr_coef = X[['city', 'predictions']].merge(self.corr_coef, on=['city'], how='left')
+            median_deviation = pred_with_corr_coef['deviation'].median()
+            median_deviation = 0 if np.isnan(median_deviation) else median_deviation
+            pred_with_corr_coef['deviation'] = pred_with_corr_coef['deviation'].fillna(median_deviation)
+            corrected_price = pred_with_corr_coef['predictions'] * (1 + pred_with_corr_coef['deviation'])
+            return corrected_price.values
         else:
             raise NotFittedError(
                 "This {} instance is not fitted yet! Call 'fit' with appropriate arguments before predict".format(

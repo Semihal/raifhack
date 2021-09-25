@@ -6,7 +6,7 @@ from traceback import format_exc
 
 from raif_hack.model import BenchmarkModel
 from raif_hack.settings import LOGGING_CONFIG, NUM_FEATURES, CATEGORICAL_OHE_FEATURES, \
-    CATEGORICAL_STE_FEATURES
+    CATEGORICAL_STE_FEATURES, ADDITIONAL_CATEGORICAL_FEATURES
 
 logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger(__name__)
@@ -45,7 +45,8 @@ if __name__ == "__main__":
         logger.info('Load model')
         model = BenchmarkModel.load(args['mp'])
         logger.info('Predict')
-        test_df['per_square_meter_price'] = model.predict(test_df[NUM_FEATURES+CATEGORICAL_OHE_FEATURES+CATEGORICAL_STE_FEATURES])
+        test_df['price_type'] = 1
+        test_df['per_square_meter_price'] = model.predict(test_df[NUM_FEATURES+CATEGORICAL_OHE_FEATURES+CATEGORICAL_STE_FEATURES + ADDITIONAL_CATEGORICAL_FEATURES])
         logger.info('Save results')
         test_df[['id','per_square_meter_price']].to_csv(args['o'], index=False)
     except Exception as e:
