@@ -5,10 +5,10 @@ CATEGORICAL_STE_FEATURES = ['region', 'city', 'realty_type']
 # признаки, для которых применяем one hot encoding
 CATEGORICAL_OHE_FEATURES = []
 
-ADDITIONAL_CATEGORICAL_FEATURES = ['osm_city_nearest_name', 'price_type']
+ADDITIONAL_CATEGORICAL_FEATURES = ['price_type', 'osm_city_nearest_name', 'date_start_month']
 
 # численные признаки
-NUM_FEATURES = [
+NUM_FEATURES = ['shift_month_avg_salary', 'min_region_price', 'max_region_price', 'median_region_price',
     'osm_amenity_points_in_0.001',
     'osm_amenity_points_in_0.005', 'osm_amenity_points_in_0.0075',
     'osm_amenity_points_in_0.01', 'osm_building_points_in_0.001',
@@ -45,8 +45,8 @@ NUM_FEATURES = [
     'reform_mean_year_building_1000', 'reform_mean_year_building_500', 'total_square']
 
 MODEL_PARAMS = dict(
-            n_estimators=2000,
-            learning_rate=0.01,
+            n_estimators=3_000,
+            learning_rate=0.003456,
             reg_alpha=1,
             num_leaves=40,
             min_child_samples=5,

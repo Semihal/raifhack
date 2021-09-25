@@ -54,11 +54,55 @@ class BenchmarkModel():
         self.one_hot_encoder.fit(X[self.ohe_cat_features])
         self.ordinal_encoder.fit(X[self.ste_cat_features], y)
 
-    def _transform_preprocessing(self, X, y=None, is_test:bool = False):
+    def osm_mask_with_infrastructure(self, df, prefix, values, dist_list):
+        query = ' or '.join([
+            f'`{prefix}_{dist}` >= {min_building}'
+            for dist, min_building in zip(dist_list, values)])
+        true_indexes = df.query(query).index
+        mask = df.index.isin(true_indexes).astype('int')
+        return mask
+
+    def _transform_preprocessing(self, X, y=None):
         X = X.copy()
         X['total_square'] = np.log1p(X['total_square'])
         X['osm_city_closest_dist'] = np.log1p(X['osm_city_closest_dist'])
-        new_features = X[['price_type']].rename(columns={'price_type': 'cat_price_type'}).reset_index(drop=True)
+
+        # feature engineering
+        X['cat_is_moscow'] = (X['region'] == 'Москва').astype(int)
+        X['cat_is_moscow_oblast'] = (X['region'] == 'Московская область').astype(int)
+        X['cat_is_other_region'] = (~X['region'].isin(['Москва', 'Московская область'])).astype(int)
+        # self.ste_cat_features.remove('region')
+
+        # osm features
+        dist_list = ['0.001', '0.005', '0.0075', '0.01']
+        values = [2, 5, 7, 10]
+        # engineering
+        osm_prefix = 'osm_shops_points_in'
+        X['cat_many_shops'] = self.osm_mask_with_infrastructure(X, osm_prefix, values, dist_list)
+        osm_prefix = 'osm_leisure_points_in'
+        X['cat_many_entertainment'] = self.osm_mask_with_infrastructure(X, osm_prefix, [1, 2, 3], dist_list[1:])
+        osm_prefix = 'osm_historic_points_in'
+        X['cat_many_history'] = self.osm_mask_with_infrastructure(X, osm_prefix, [1, 2, 3], dist_list[1:])
+        osm_prefix = 'osm_transport_stop_points_in'
+        X['cat_many_transports'] = self.osm_mask_with_infrastructure(X, osm_prefix, [1, 2, 3], dist_list[1:])
+        osm_prefix = 'osm_culture_points_in'
+        X['cat_many_culture_points'] = self.osm_mask_with_infrastructure(X, osm_prefix, [1, 2, 2], dist_list[1:])
+        osm_prefix = 'osm_amenity_points_in'
+        X['cat_many_amenity_points'] = self.osm_mask_with_infrastructure(X, osm_prefix, [1, 1, 1], dist_list[1:])
+
+        new_columns = [
+            'cat_is_moscow',
+            'cat_is_moscow_oblast',
+            'cat_is_other_region',
+            'cat_many_shops',
+            'cat_many_entertainment',
+            'cat_many_history',
+            'cat_many_transports',
+            'cat_many_culture_points',
+            'cat_many_amenity_points',
+            'price_type'
+        ]
+        new_features = X[new_columns].rename(columns={'price_type': 'cat_price_type'}).reset_index(drop=True)
         # применение стндартизациии
         scaler_features = self.scaler.transform(X[self.num_features])
         scaler_features = pd.DataFrame(scaler_features, columns=[f'num_{col}' for col in self.num_features])
@@ -129,7 +173,7 @@ class BenchmarkModel():
         :return: np.array, предсказания (цены на коммерческую недвижимость)
         """
         if self.__is_fitted:
-            features, _ = self._transform_preprocessing(X, is_test=True)
+            features, _ = self._transform_preprocessing(X)
             X.loc[:, 'predictions'] = self.model.predict(features)
             pred_with_corr_coef = X[['city', 'predictions']].merge(self.corr_coef, on=['city'], how='left')
             median_deviation = pred_with_corr_coef['deviation'].median()

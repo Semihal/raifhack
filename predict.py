@@ -32,8 +32,8 @@ def parse_args():
 
     return parser.parse_args()
 
-if __name__ == "__main__":
 
+if __name__ == "__main__":
     try:
         logger.info('START predict.py')
         args = vars(parse_args())
@@ -46,7 +46,7 @@ if __name__ == "__main__":
         model = BenchmarkModel.load(args['mp'])
         logger.info('Predict')
         test_df['price_type'] = 1
-        test_df['per_square_meter_price'] = model.predict(test_df[NUM_FEATURES+CATEGORICAL_OHE_FEATURES+CATEGORICAL_STE_FEATURES + ADDITIONAL_CATEGORICAL_FEATURES])
+        test_df['per_square_meter_price'] = model.predict(test_df[NUM_FEATURES+CATEGORICAL_OHE_FEATURES+CATEGORICAL_STE_FEATURES + ADDITIONAL_CATEGORICAL_FEATURES]) * 0.95
         logger.info('Save results')
         test_df[['id','per_square_meter_price']].to_csv(args['o'], index=False)
     except Exception as e:
