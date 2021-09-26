@@ -163,7 +163,6 @@ class BenchmarkModel():
         logger.info('Find corr coefficient')
         self.__is_fitted = True
         self._find_corr_coefficient(x_val, y_val)
-        # logger.info(f'Corr coef: {self.corr_coef.to_string()}')
 
     def predict(self, X: pd.DataFrame) -> np.array:
         """Предсказание модели Предсказываем преобразованный таргет, затем конвертируем в обычную цену через обратное
